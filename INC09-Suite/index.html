@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>INC09 Suite – Sistema Integral IMSS</title>
+<meta name="description" content="Sistema integral INC09: Expedientes, Visitas, Viaticos, Analisis Rale y Generador de Vales IMSS">
+<link rel="stylesheet" href="css/main.css">
+<!-- Excel -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- SQLite WebAssembly -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/sql-wasm.js"></script>
+<!-- Leaflet & HTML2Canvas para Mapas interactivos -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<!-- bcrypt (local, pure JS — UMD build: expone dcodeIO.bcrypt) -->
+<script src="js/bcrypt.min.js"></script>
+<script>
+  // Normalizar la referencia global: el build UMD de bcryptjs expone dcodeIO.bcrypt
+  // Lo movemos a window.bcrypt para uso directo en sqlitedb.js
+  window.bcrypt = (typeof dcodeIO !== 'undefined' && dcodeIO.bcrypt)
+    ? dcodeIO.bcrypt
+    : (typeof bcrypt !== 'undefined' ? bcrypt : null);
+  if (!window.bcrypt) {
+    console.error('[INC09] FATAL: bcryptjs no encontrado. Verifica js/bcrypt.min.js');
+  } else {
+    console.log('[INC09] ✅ bcryptjs listo:', typeof window.bcrypt.hash);
+  }
+</script>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login-screen">
+<div class="login-card">
+  <div class="login-logo">
+    <div class="logo-mark">I9</div>
+    <h1>INC09 Suite</h1>
+    <p>Sistema Integral IMSS – Cobranza e Investigaciones</p>
+  </div>
+  <div id="login-error" class="login-error"></div>
+  <div id="login-init-msg" style="display:none;text-align:center;font-size:12px;color:var(--text-muted);margin-bottom:10px"></div>
+  <form id="login-form">
+    <div class="field" style="margin-bottom:14px">
+      <label class="field-label">Usuario</label>
+      <input id="login-user" class="field-input" placeholder="Ingrese su usuario" autocomplete="username">
+    </div>
+    <div class="field" style="margin-bottom:20px">
+      <label class="field-label">Contraseña</label>
+      <input id="login-pass" type="password" class="field-input" placeholder="Contraseña" autocomplete="current-password">
+    </div>
+    <button id="btn-login" type="submit" class="btn btn-primary" style="width:100%;justify-content:center;padding:11px">
+      <span id="login-spinner" style="display:none">⏳ </span>Iniciar Sesión
+    </button>
+  </form>
+  <p style="text-align:center;margin-top:16px;font-size:11px;color:var(--text-dim)">v1.0.0 &mdash; INC09 Suite &copy; 2026 &nbsp;|&nbsp; 🔒 Cifrado bcrypt</p>
+</div>
+</div>
+
+<!-- APP SHELL -->
+<div id="app" style="display:none">
+
+<!-- SIDEBAR -->
+<nav id="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon">I9</div>
+    <span class="logo-text">INC09 Suite</span>
+  </div>
+  <div class="sidebar-nav">
+    <div class="nav-section-label">Principal</div>
+    <button class="nav-item" data-page="dashboard"><span class="nav-icon">📊</span><span class="nav-label">Dashboard</span></button>
+    <div class="nav-section-label">Modulos</div>
+    <button class="nav-item" data-page="expedientes"><span class="nav-icon">📂</span><span class="nav-label">Expedientes</span></button>
+    <button class="nav-item" data-page="visitas"><span class="nav-icon">🗺️</span><span class="nav-label">Control de Visitas</span></button>
+    <button class="nav-item" data-page="viaticos"><span class="nav-icon">💰</span><span class="nav-label">Viaticos</span></button>
+    <button class="nav-item" data-page="analisis"><span class="nav-icon">📈</span><span class="nav-label">Analisis</span></button>
+    <button class="nav-item" data-page="vales"><span class="nav-icon">📄</span><span class="nav-label">Generador de Vales</span></button>
+    <div class="nav-section-label">Sistema</div>
+    <button class="nav-item" id="nav-admin" data-page="admin"><span class="nav-icon">⚙️</span><span class="nav-label">Administracion</span></button>
+    <button class="nav-item" data-page="logout"><span class="nav-icon">🚪</span><span class="nav-label">Cerrar Sesion</span></button>
+  </div>
+  <div class="sidebar-footer">
+    <div class="user-avatar" id="user-avatar">AD</div>
+    <div class="user-info">
+      <div class="user-name" id="user-name">Admin</div>
+      <div class="user-role" id="user-role">Administrador</div>
+    </div>
+  </div>
+</nav>
+
+<!-- MAIN -->
+<div id="main">
+  <!-- TOPBAR -->
+  <div id="topbar">
+    <button id="btn-sidebar-toggle">☰</button>
+    <div>
+      <div class="page-title" id="topbar-title">Dashboard</div>
+      <div class="page-subtitle" id="topbar-sub">Resumen general</div>
+    </div>
+    <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+      <span id="clock" style="font-size:12px;color:var(--text-muted)"></span>
+    </div>
+  </div>
+
+  <!-- PAGE CONTENT -->
+  <div id="page-content">
+
+<!-- ===== DASHBOARD ===== -->
+<section id="page-dashboard" class="page">
+  <div class="stats-grid">
+    <div class="stat-card"><div class="stat-icon blue">📂</div><div class="stat-info"><div class="stat-value" id="stat-expedientes">0</div><div class="stat-label">Expedientes</div></div></div>
+    <div class="stat-card"><div class="stat-icon green">🗺️</div><div class="stat-info"><div class="stat-value" id="stat-visitas">0</div><div class="stat-label">Visitas Registradas</div></div></div>
+    <div class="stat-card"><div class="stat-icon amber">💰</div><div class="stat-info"><div class="stat-value" id="stat-viaticos">0</div><div class="stat-label">Reportes Viaticos</div></div></div>
+    <div class="stat-card"><div class="stat-icon purple">💵</div><div class="stat-info"><div class="stat-value" id="stat-importe">$0</div><div class="stat-label">Importe Total Exp.</div></div></div>
+  </div>
+  <div class="card">
+    <div class="card-header"><span class="card-title">📋 Expedientes Recientes</span><div class="card-actions"><button class="btn btn-sm btn-primary" onclick="App.navigate('expedientes')">Ver todos</button></div></div>
+    <div class="table-wrap"><table><thead><tr><th>Reg. Patronal</th><th>Razon Social</th><th>Rango</th><th>Importe</th><th>Fecha</th><th></th></tr></thead><tbody id="dash-recientes-body"></tbody></table></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:4px">
+    <div class="card" style="cursor:pointer" onclick="App.navigate('visitas')"><div style="font-size:32px;margin-bottom:8px">🗺️</div><div style="font-weight:700">Control de Visitas</div><div style="font-size:12px;color:var(--text-muted);margin-top:4px">Negativas, Positivos, CORE_03, Vistas Origen</div></div>
+    <div class="card" style="cursor:pointer" onclick="App.navigate('analisis')"><div style="font-size:32px;margin-bottom:8px">📈</div><div style="font-weight:700">Analisis</div><div style="font-size:12px;color:var(--text-muted);margin-top:4px">Merger COP/RCV y Analisis RALE</div></div>
+    <div class="card" style="cursor:pointer" onclick="App.navigate('vales')"><div style="font-size:32px;margin-bottom:8px">📄</div><div style="font-weight:700">Generador de Vales</div><div style="font-size:12px;color:var(--text-muted);margin-top:4px">Vales de prestamo IMSS desde Excel</div></div>
+  </div>
+</section>
+
+<!-- ===== EXPEDIENTES ===== -->
+<section id="page-expedientes" class="page">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">📂 Expedientes IMSS</span>
+      <div class="card-actions">
+        <button class="btn btn-primary" onclick="Modules.expedientes.openNew()">+ Nuevo Expediente</button>
+        <button class="btn btn-ghost" onclick="Utils.exportCSV(DB.expedientes.getAll(),'expedientes.csv')">⬇ CSV</button>
+      </div>
+    </div>
+    <div class="search-bar">
+      <div class="search-input-wrap"><span class="search-icon">🔍</span><input class="search-input" id="exp-search" placeholder="Buscar por RP, razon social, RFC..." oninput="Modules.expedientes.search(this.value)"></div>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>Reg. Patronal</th><th>Razon Social</th><th>RFC</th><th>Rango</th><th>Tipo Persona</th><th>Importe</th><th>Fecha Alta</th><th>Acciones</th></tr></thead><tbody id="exp-tbody"></tbody></table></div>
+    <div style="margin-top:8px;font-size:12px;color:var(--text-muted)" id="exp-page-info"></div>
+  </div>
+</section>
+
+<!-- MODAL EXPEDIENTE -->
+<div class="modal-overlay" id="exp-modal">
+<div class="modal" style="max-width:820px">
+  <div class="modal-title" id="exp-modal-title">Nuevo Expediente</div>
+  <div class="modal-subtitle">Datos del patron / razon social</div>
+  <div class="form-grid form-grid-2">
+    <div class="field"><label class="field-label">Registro Patronal *</label><input id="ef-rp" class="field-input" placeholder="XXX-XXXXX-XX"></div>
+    <div class="field"><label class="field-label">Razon Social *</label><input id="ef-rs" class="field-input" placeholder="Nombre o razon social"></div>
+    <div class="field"><label class="field-label">RFC</label><input id="ef-rfc" class="field-input" placeholder="RFC (13 chars)"></div>
+    <div class="field"><label class="field-label">Rango</label><select id="ef-rango" class="field-input"><option value="">— Seleccionar —</option><option value="rango_i">Rango I</option><option value="rango_ii">Rango II</option><option value="rango_iii">Rango III</option><option value="rango_iv">Rango IV</option><option value="rango_v">Rango V</option></select></div>
+    <div class="field"><label class="field-label">Tipo Persona</label><select id="ef-tipo" class="field-input"><option value="">— Seleccionar —</option><option value="moral">Moral</option><option value="fisica">Fisica</option></select></div>
+    <div class="field"><label class="field-label">Actividad</label><input id="ef-actividad" class="field-input"></div>
+    <div class="field"><label class="field-label">Importe</label><input id="ef-importe" type="number" class="field-input" placeholder="0.00"></div>
+    <div class="field"><label class="field-label">Integrador</label><input id="ef-integrador" class="field-input"></div>
+    <div class="field"><label class="field-label">Fecha de Baja</label><input id="ef-fecha-baja" type="date" class="field-input"></div>
+    <div class="field" style="grid-column:1/-1"><label class="field-label">Domicilio General</label><input id="ef-dom-general" class="field-input"></div>
+    <div class="field"><label class="field-label">Domicilio DAD</label><input id="ef-dom-dad" class="field-input"></div>
+    <div class="field"><label class="field-label">Domicilio ARP Fiscal</label><input id="ef-dom-arp" class="field-input"></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-ghost" onclick="Modules.expedientes.closeModal()">Cancelar</button>
+    <button class="btn btn-primary" onclick="Modules.expedientes.saveModal()">💾 Guardar</button>
+  </div>
+</div>
+</div>
+
+<!-- ===== CONTROL DE EXPEDIENTE ===== -->
+<section id="page-control" class="page">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+    <button class="btn btn-ghost" onclick="Modules.expedientes.backToList()">← Volver</button>
+    <div><h2 style="font-size:18px;font-weight:800" id="ctrl-title">—</h2><div style="font-size:12px;color:var(--text-muted)" id="ctrl-rp">—</div></div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+    <div class="card" style="padding:14px"><div class="field-label">RFC</div><div id="ctrl-rfc" style="font-weight:600">—</div></div>
+    <div class="card" style="padding:14px"><div class="field-label">Rango</div><div id="ctrl-rango" style="font-weight:600">—</div></div>
+    <div class="card" style="padding:14px"><div class="field-label">Importe</div><div id="ctrl-importe" style="font-weight:600;color:var(--accent)">—</div></div>
+    <div class="card" style="padding:14px"><div class="field-label">Integrador</div><div id="ctrl-integrador" style="font-weight:600">—</div></div>
+  </div>
+  <div class="card" style="margin-bottom:0"><div class="field-label" style="margin-bottom:8px">Domicilio General</div><div id="ctrl-dom">—</div></div>
+
+  <div style="margin-top:16px">
+    <div class="tabs">
+      <button class="tab-btn active" onclick="showCtrlTab('socios',this)">👥 Socios</button>
+      <button class="tab-btn" onclick="showCtrlTab('fi',this)">📥 Fuentes Internas</button>
+      <button class="tab-btn" onclick="showCtrlTab('fe',this)">📤 Fuentes Externas</button>
+    </div>
+
+    <div id="ctrl-tab-socios">
+      <div class="card">
+        <div class="card-header"><span class="card-title">Socios del Expediente</span><button class="btn btn-sm btn-primary" onclick="document.getElementById('socio-form').style.display=document.getElementById('socio-form').style.display?'':'block'">+ Agregar</button></div>
+        <div id="socio-form" style="display:none;background:var(--glass);border-radius:8px;padding:14px;margin-bottom:12px">
+          <div class="form-grid form-grid-3">
+            <div class="field"><label class="field-label">Nombre *</label><input id="socio-nombre" class="field-input"></div>
+            <div class="field"><label class="field-label">Domicilio</label><input id="socio-domicilio" class="field-input"></div>
+            <div class="field"><label class="field-label">Procedencia</label><input id="socio-procedencia" class="field-input"></div>
+          </div>
+          <div style="margin-top:10px;text-align:right"><button class="btn btn-primary" onclick="Modules.expedientes.addSocio()">Guardar Socio</button></div>
+        </div>
+        <div class="table-wrap"><table><thead><tr><th>#</th><th>Nombre</th><th>Domicilio</th><th>Procedencia</th><th></th></tr></thead><tbody id="ctrl-socios-tbody"></tbody></table></div>
+      </div>
+    </div>
+
+    <div id="ctrl-tab-fi" style="display:none">
+      <div class="card">
+        <div class="card-header"><span class="card-title">Fuentes Internas</span><button class="btn btn-sm btn-primary" onclick="Modules.expedientes.openFuenteModal('interna')">+ Agregar</button></div>
+        <div class="table-wrap"><table><thead><tr><th>Nombre Fuente</th><th>No. Oficio</th><th>Fecha Oficio</th><th>Fecha Respuesta</th><th>Estatus</th><th>Observaciones</th><th></th></tr></thead><tbody id="ctrl-fi-tbody"></tbody></table></div>
+      </div>
+    </div>
+
+    <div id="ctrl-tab-fe" style="display:none">
+      <div class="card">
+        <div class="card-header"><span class="card-title">Fuentes Externas</span><button class="btn btn-sm btn-primary" onclick="Modules.expedientes.openFuenteModal('externa')">+ Agregar</button></div>
+        <div class="table-wrap"><table><thead><tr><th>Nombre Fuente</th><th>No. Oficio</th><th>Fecha Oficio</th><th>Fecha Respuesta</th><th>Estatus</th><th>Observaciones</th><th></th></tr></thead><tbody id="ctrl-fe-tbody"></tbody></table></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- MODAL FUENTE -->
+<div class="modal-overlay" id="fuente-modal">
+<div class="modal">
+  <div class="modal-title" id="fuente-modal-title">Nueva Fuente</div>
+  <div class="form-grid form-grid-2">
+    <div class="field" style="grid-column:1/-1"><label class="field-label">Nombre de la Fuente *</label><input id="fuente-nombre" class="field-input"></div>
+    <div class="field"><label class="field-label">No. Oficio</label><input id="fuente-oficio" class="field-input"></div>
+    <div class="field"><label class="field-label">Fecha Oficio</label><input id="fuente-fecha-oficio" type="date" class="field-input"></div>
+    <div class="field"><label class="field-label">No. Respuesta</label><input id="fuente-no-resp" class="field-input"></div>
+    <div class="field"><label class="field-label">Fecha Respuesta</label><input id="fuente-fecha-resp" type="date" class="field-input"></div>
+    <div class="field"><label class="field-label">Fecha Caducidad</label><input id="fuente-caducidad" type="date" class="field-input"></div>
+    <div class="field"><label class="field-label">Estatus</label><select id="fuente-estatus" class="field-input"><option>Pendiente</option><option>Concluido</option><option>Actualizar</option></select></div>
+    <div class="field" style="grid-column:1/-1"><label class="field-label">Observaciones</label><textarea id="fuente-obs" class="field-input" rows="3"></textarea></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-ghost" onclick="Modules.expedientes.closeFuenteModal()">Cancelar</button>
+    <button class="btn btn-primary" onclick="Modules.expedientes.saveFuente()">💾 Guardar</button>
+  </div>
+</div>
+</div>
+
+<!-- ===== VISITAS ===== -->
+<section id="page-visitas" class="page">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">🗺️ Sistema de Localizacion de Domicilios</span>
+      <div class="card-actions">
+        <button class="btn btn-primary" onclick="Modules.visitas.openNew()">+ Nuevo Registro</button>
+        <button class="btn btn-secondary" onclick="Modules.visitas.openImportModal()" title="Pegar datos desde Excel">📋 Importar Excel</button>
+        <button class="btn btn-danger" onclick="Modules.visitas.deleteAll()" title="Eliminar todos los registros de esta tabla">🗑 Vaciar</button>
+        <button class="btn btn-ghost" onclick="Modules.visitas.exportTab()">↓ CSV</button>
+      </div>
+    </div>
+    <div class="tabs" style="margin-bottom:12px">
+      <button class="tab-btn vis-tab-btn active" data-tab="neg" onclick="Modules.visitas.switchTab('neg')">Negativas <span id="vis-count-neg" class="badge badge-gray" style="margin-left:4px">0</span></button>
+      <button class="tab-btn vis-tab-btn" data-tab="pos" onclick="Modules.visitas.switchTab('pos')">Positivos <span id="vis-count-pos" class="badge badge-green" style="margin-left:4px">0</span></button>
+      <button class="tab-btn vis-tab-btn" data-tab="rest" onclick="Modules.visitas.switchTab('rest')">Restablecimientos <span id="vis-count-rest" class="badge badge-blue" style="margin-left:4px">0</span></button>
+      <button class="tab-btn vis-tab-btn" data-tab="c03" onclick="Modules.visitas.switchTab('c03')">CORE_03 <span id="vis-count-c03" class="badge badge-amber" style="margin-left:4px">0</span></button>
+      <button class="tab-btn vis-tab-btn" data-tab="c02" onclick="Modules.visitas.switchTab('c02')">Core_02 <span id="vis-count-c02" class="badge badge-amber" style="margin-left:4px">0</span></button>
+      <button class="tab-btn vis-tab-btn" data-tab="arp" onclick="Modules.visitas.switchTab('arp')">ARP/Socios <span id="vis-count-arp" class="badge badge-amber" style="margin-left:4px">0</span></button>
+      <button class="tab-btn vis-tab-btn" data-tab="dad" onclick="Modules.visitas.switchTab('dad')">DAD <span id="vis-count-dad" class="badge badge-amber" style="margin-left:4px">0</span></button>
+      <button class="tab-btn vis-tab-btn" data-tab="act" onclick="Modules.visitas.switchTab('act')">Actualizaciones <span id="vis-count-act" class="badge badge-amber" style="margin-left:4px">0</span></button>
+      <button class="tab-btn vis-tab-btn" data-tab="origen" onclick="Modules.visitas.switchTab('origen')">Vistas Origen <span id="vis-count-origen" class="badge badge-purple" style="margin-left:4px">0</span></button>
+    </div>
+    <div class="search-bar">
+      <div class="search-input-wrap"><span class="search-icon">🔍</span><input class="search-input" id="vis-search" placeholder="Buscar..." oninput="Modules.visitas.search(this.value)"></div>
+    </div>
+    <div class="table-wrap"><table><thead id="vis-thead"></thead><tbody id="vis-tbody"></tbody></table></div>
+  </div>
+</section>
+
+<!-- MODAL IMPORTAR EXCEL -->
+<div id="vis-import-modal" class="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="vis-import-title">Importar masivamente desde Excel</h3>
+      <button class="close-btn" onclick="Modules.visitas.closeImportModal()">×</button>
+    </div>
+    <div class="modal-body">
+      <p style="margin-bottom:12px; color:var(--text-muted); font-size:14px;">
+        1. Abre tu archivo Excel.<br>
+        2. Selecciona las filas que contienen los datos (sin los encabezados).<br>
+        3. Presiona Ctrl+C para copiar.<br>
+        4. Haz clic en el recuadro de abajo y presiona Ctrl+V para pegar.
+      </p>
+      <div class="field" style="grid-column:1/-1">
+        <textarea id="vis-import-textarea" class="field-input" rows="10" placeholder="Pega aquí los datos copiados de Excel..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="Modules.visitas.closeImportModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="Modules.visitas.processExcelImport()">Importar Datos</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL VISITA -->
+<div class="modal-overlay" id="vis-modal">
+  <div class="modal" style="width: 90vw !important; max-width: 1600px !important;">
+    <div class="modal-title" id="vis-modal-title">Nuevo Registro</div>
+  <div id="vis-form-body"></div>
+  <div class="modal-footer">
+    <button class="btn btn-ghost" onclick="Modules.visitas.closeModal()">Cancelar</button>
+    <button class="btn btn-primary" onclick="Modules.visitas.saveRecord()">💾 Guardar</button>
+  </div>
+</div>
+</div>
+
+<!-- ===== VIATICOS ===== -->
+<section id="page-viaticos" class="page">
+  <div style="display:flex;gap:8px;margin-bottom:16px">
+    <button class="btn vt-tab-btn active" data-tab="form" onclick="Modules.viaticos.switchTab('form')">📝 Captura</button>
+    <button class="btn vt-tab-btn btn-ghost" data-tab="list" onclick="Modules.viaticos.switchTab('list')">📋 Registros</button>
+  </div>
+
+  <!-- FORM SECTION -->
+  <div id="vt-form-section">
+    <!-- Fila superior: Informacion General + Detalle de Facturas -->
+    <div style="display:grid;grid-template-columns:1fr 380px;gap:16px;margin-bottom:16px">
+      <!-- Izquierda -->
+      <div>
+        <div class="card" style="margin-bottom:0">
+          <div class="card-header"><span class="card-title">📄 Informacion General</span></div>
+          <div class="form-grid form-grid-2">
+            <div class="field" style="grid-column:1/-1"><label class="field-label">Nombre TTD *</label><input id="vt-nombre" class="field-input" placeholder="Nombre completo del TTD"></div>
+            <div class="field"><label class="field-label">Figura</label><select id="vt-figura" class="field-input"><option value="">— Seleccionar —</option><option>Titular</option><option>Notificador-Localizador</option><option>Ejecutor Fiscal</option><option>Firma Digital</option><option>Auditor</option></select></div>
+            <div class="field"><label class="field-label">Departamento</label><select id="vt-depto" class="field-input"><option value="">— Seleccionar —</option><option>Prestaciones Economicas</option><option>Cobranza</option><option>Auditoria</option><option>Afiliacion Vigencia</option><option>Direccion General</option></select></div>
+            <div class="field"><label class="field-label">Estado</label><select id="vt-estado" class="field-input"><option>Borrador</option><option>Enviado</option><option>Aprobado</option><option>Rechazado</option></select></div>
+            <div class="field"><label class="field-label">Fecha</label><input id="vt-fecha" type="date" class="field-input"></div>
+            <div class="field"><label class="field-label">Jefe de Oficina</label><select id="vt-jefe" class="field-input"><option value="">— Seleccionar —</option></select></div>
+            <div class="field"><label class="field-label">Subdelegado</label><select id="vt-subdelegado" class="field-input"><option value="">— Seleccionar —</option></select></div>
+            <div class="field"><label class="field-label">Rubricas</label><textarea id="vt-rubricas" class="field-input" rows="2"></textarea></div>
+            <div class="field"><label class="field-label">Leyenda</label><textarea id="vt-leyenda" class="field-input" rows="2"></textarea></div>
+          </div>
+        </div>
+      </div>
+      <!-- Derecha: Facturas + Botones -->
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="card" style="margin-bottom:0">
+          <div class="card-header"><span class="card-title">💰 Detalle de Facturas</span></div>
+          <table style="width:100%;margin-bottom:12px"><thead><tr><th style="width:40px">#</th><th>Fecha</th><th style="width:110px">Cantidad ($)</th></tr></thead>
+          <tbody>
+            <tr><td style="text-align:center;color:var(--text-muted)">1</td><td><input type="text" id="vt-fecha-1" class="field-input" placeholder="dd/mm/aaaa" style="padding:6px 8px"></td><td><input type="number" id="vt-cant-1" class="field-input" step="0.01" placeholder="0.00" style="padding:6px 8px;text-align:right" oninput="Modules.viaticos.recalcTotal()"></td></tr>
+            <tr><td style="text-align:center;color:var(--text-muted)">2</td><td><input type="text" id="vt-fecha-2" class="field-input" placeholder="dd/mm/aaaa" style="padding:6px 8px"></td><td><input type="number" id="vt-cant-2" class="field-input" step="0.01" placeholder="0.00" style="padding:6px 8px;text-align:right" oninput="Modules.viaticos.recalcTotal()"></td></tr>
+            <tr><td style="text-align:center;color:var(--text-muted)">3</td><td><input type="text" id="vt-fecha-3" class="field-input" placeholder="dd/mm/aaaa" style="padding:6px 8px"></td><td><input type="number" id="vt-cant-3" class="field-input" step="0.01" placeholder="0.00" style="padding:6px 8px;text-align:right" oninput="Modules.viaticos.recalcTotal()"></td></tr>
+            <tr><td style="text-align:center;color:var(--text-muted)">4</td><td><input type="text" id="vt-fecha-4" class="field-input" placeholder="dd/mm/aaaa" style="padding:6px 8px"></td><td><input type="number" id="vt-cant-4" class="field-input" step="0.01" placeholder="0.00" style="padding:6px 8px;text-align:right" oninput="Modules.viaticos.recalcTotal()"></td></tr>
+            <tr><td style="text-align:center;color:var(--text-muted)">5</td><td><input type="text" id="vt-fecha-5" class="field-input" placeholder="dd/mm/aaaa" style="padding:6px 8px"></td><td><input type="number" id="vt-cant-5" class="field-input" step="0.01" placeholder="0.00" style="padding:6px 8px;text-align:right" oninput="Modules.viaticos.recalcTotal()"></td></tr>
+          </tbody></table>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid var(--border)">
+            <span style="font-size:14px;font-weight:700;color:var(--success)" id="vt-total-display">$0.00</span>
+            <span style="font-size:11px;color:var(--text-muted)">TOTAL FACTURAS</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <button class="btn btn-ghost" style="flex:1" onclick="Modules.viaticos.clearForm()">🗑 Limpiar</button>
+          <button class="btn btn-primary" style="flex:1" onclick="Modules.viaticos.saveForm()">💾 Guardar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Fila inferior: Visitas Realizadas — ANCHO COMPLETO -->
+    <div class="card" style="padding:0;margin-bottom:0">
+      <div class="card-header" style="padding:12px 18px">
+        <span class="card-title">🗺️ Visitas Realizadas</span>
+        <span class="badge badge-blue" style="margin-left:8px">5 visitas · máx. 2 registros c/u</span>
+      </div>
+      <!-- Las 5 visitas en grid 5 columnas -->
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:0;border-top:1px solid var(--border)">
+
+        <!-- Visita 1 -->
+        <div class="vr-col" id="vr-col-1">
+          <div class="vr-col-hdr">
+            <span class="vr-col-title">Visita 1</span>
+            <button id="visita-btn-1" class="btn btn-sm btn-secondary" onclick="Modules.viaticos.addVisitaRow(1)" style="padding:3px 10px;font-size:11px">+ Agregar</button>
+          </div>
+          <div id="visita-tbody-1" class="vr-col-body">
+            <div class="vr-empty">Sin registros</div>
+          </div>
+        </div>
+
+        <!-- Visita 2 -->
+        <div class="vr-col" id="vr-col-2">
+          <div class="vr-col-hdr">
+            <span class="vr-col-title">Visita 2</span>
+            <button id="visita-btn-2" class="btn btn-sm btn-secondary" onclick="Modules.viaticos.addVisitaRow(2)" style="padding:3px 10px;font-size:11px">+ Agregar</button>
+          </div>
+          <div id="visita-tbody-2" class="vr-col-body">
+            <div class="vr-empty">Sin registros</div>
+          </div>
+        </div>
+
+        <!-- Visita 3 -->
+        <div class="vr-col" id="vr-col-3">
+          <div class="vr-col-hdr">
+            <span class="vr-col-title">Visita 3</span>
+            <button id="visita-btn-3" class="btn btn-sm btn-secondary" onclick="Modules.viaticos.addVisitaRow(3)" style="padding:3px 10px;font-size:11px">+ Agregar</button>
+          </div>
+          <div id="visita-tbody-3" class="vr-col-body">
+            <div class="vr-empty">Sin registros</div>
+          </div>
+        </div>
+
+        <!-- Visita 4 -->
+        <div class="vr-col" id="vr-col-4">
+          <div class="vr-col-hdr">
+            <span class="vr-col-title">Visita 4</span>
+            <button id="visita-btn-4" class="btn btn-sm btn-secondary" onclick="Modules.viaticos.addVisitaRow(4)" style="padding:3px 10px;font-size:11px">+ Agregar</button>
+          </div>
+          <div id="visita-tbody-4" class="vr-col-body">
+            <div class="vr-empty">Sin registros</div>
+          </div>
+        </div>
+
+        <!-- Visita 5 -->
+        <div class="vr-col" style="border-right:none" id="vr-col-5">
+          <div class="vr-col-hdr">
+            <span class="vr-col-title">Visita 5</span>
+            <button id="visita-btn-5" class="btn btn-sm btn-secondary" onclick="Modules.viaticos.addVisitaRow(5)" style="padding:3px 10px;font-size:11px">+ Agregar</button>
+          </div>
+          <div id="visita-tbody-5" class="vr-col-body">
+            <div class="vr-empty">Sin registros</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- LIST SECTION -->
+  <div id="vt-list-section" style="display:none">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">📋 Registros de Viaticos <span id="vt-count" class="badge badge-gray"></span></span>
+        <div class="card-actions">
+          <button class="btn btn-ghost" onclick="Modules.viaticos.exportList()">⬇ CSV</button>
+        </div>
+      </div>
+      <div class="search-bar"><div class="search-input-wrap"><span class="search-icon">🔍</span><input class="search-input" placeholder="Buscar..." oninput="Modules.viaticos.searchList(this.value)"></div></div>
+      <div class="table-wrap"><table><thead><tr><th>Folio</th><th>Nombre TTD</th><th>Figura</th><th>Fecha</th><th style="text-align:center">Visitas</th><th>Total</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="vt-list-tbody"></tbody></table></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== ANALISIS RALE ===== -->
+<section id="page-analisis" class="page">
+  <div style="display:flex;gap:8px;margin-bottom:16px">
+    <button class="btn ana-tab-btn active" data-tab="merger" onclick="Modules.analisis.switchTab('merger')">🔀 Merger COP/RCV</button>
+    <button class="btn ana-tab-btn btn-ghost" data-tab="rale" onclick="Modules.analisis.switchTab('rale')">📊 Analisis RALE</button>
+  </div>
+
+  <!-- MERGER -->
+  <div id="ana-merger-section">
+    <div style="display:grid;grid-template-columns:320px 1fr;gap:16px">
+      <div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">📁 Seleccionar Archivos</span></div>
+          <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Selecciona multiples archivos .xlsx con prefijo COP_ o RCV_</p>
+          <label class="btn btn-primary" style="display:block;text-align:center;cursor:pointer">
+            📂 Seleccionar Archivos
+            <input type="file" accept=".xlsx" multiple style="display:none" onchange="Modules.analisis.onMergerFiles(this)">
+          </label>
+          <div id="merger-file-list" style="margin-top:12px;max-height:200px;overflow-y:auto"></div>
+          <button id="btn-merge-run" class="btn btn-success" style="width:100%;margin-top:12px;justify-content:center" disabled onclick="Modules.analisis.runMerge()">🔀 Ejecutar Union</button>
+          <button id="btn-merge-export" class="btn btn-ghost" style="width:100%;margin-top:8px;justify-content:center" disabled onclick="Modules.analisis.exportMerge()">⬇ Exportar Rale</button>
+        </div>
+        <!-- Rales Generados -->
+        <div class="card" style="margin-top:12px">
+          <div class="card-header"><span class="card-title">📁 Rales Generados</span></div>
+          <div id="rale-generated-list" style="min-height:40px;max-height:200px;overflow-y:auto;font-size:12px;padding:4px 0">
+            <div data-placeholder style="color:var(--text-muted);padding:4px 0">Sin archivos exportados aún.</div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">📋 Log de Proceso</span></div>
+          <div class="log-box" id="merger-log" style="height:160px">Esperando archivos...</div>
+        </div>
+        <div id="merger-preview"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RALE -->
+  <div id="ana-rale-section" style="display:none">
+    <div style="display:grid;grid-template-columns:360px 1fr;gap:16px">
+      <div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">⚙️ Configuracion RALE</span></div>
+          <div class="field" style="margin-bottom:12px">
+            <label class="field-label">Archivo RALE (.xlsx)</label>
+            <div id="rale-server-wrap" style="display:none;margin-top:4px;margin-bottom:8px">
+              <select id="rale-server-select" class="field-input" onchange="Modules.analisis.loadRaleFromServer()"></select>
+            </div>
+            <label class="btn btn-secondary" style="display:block;text-align:center;cursor:pointer;margin-top:6px">
+              📂 Seleccionar RALE local
+              <input type="file" accept=".xlsx" style="display:none" onchange="Modules.analisis.onRaleFile(this)">
+            </label>
+            <div id="rale-file-name" style="font-size:11px;color:var(--text-muted);margin-top:6px">Ningun archivo seleccionado</div>
+          </div>
+          <div class="field" style="margin-bottom:12px">
+            <label class="field-label">Fecha de referencia</label>
+            <input id="rale-fecha" type="date" class="field-input">
+          </div>
+          <div class="field" style="margin-bottom:12px">
+            <label class="field-label">Lista de RP (opcional, uno por linea)</label>
+            <textarea id="rale-rp-list" class="field-input" rows="5" placeholder="MEX-12345-01&#10;JAL-98765-23&#10;(dejar vacio = todos)"></textarea>
+          </div>
+          <button id="btn-rale-run" class="btn btn-success" style="width:100%;justify-content:center" disabled onclick="Modules.analisis.runRale()">📊 Ejecutar Analisis</button>
+          <button id="btn-rale-export" class="btn btn-ghost" style="width:100%;margin-top:8px;justify-content:center" disabled onclick="Modules.analisis.exportRale()">⬇ Exportar Excel</button>
+        </div>
+      </div>
+      <div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">📋 Log RALE</span></div>
+          <div class="log-box" id="rale-log" style="height:160px">Esperando archivo RALE...</div>
+        </div>
+        <div id="rale-preview"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== GENERADOR DE VALES ===== -->
+<section id="page-vales" class="page">
+  <div style="display:grid;grid-template-columns:340px 1fr;gap:16px">
+    <div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">📂 Archivo Excel RALE</span></div>
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">El archivo debe tener hoja "Registros" y hoja "Rale"</p>
+        <label class="btn btn-primary" style="display:block;text-align:center;cursor:pointer">
+          📂 Seleccionar RALE.xlsx
+          <input type="file" accept=".xlsx" style="display:none" onchange="Modules.vales.onFileChange(this)">
+        </label>
+        <div id="vales-file-name" style="font-size:11px;color:var(--text-muted);margin-top:8px">Ningun archivo seleccionado</div>
+        <div style="margin-top:16px;display:flex;flex-direction:column;gap:8px">
+          <button class="btn btn-ghost" onclick="Modules.vales.selectAll()">☑ Seleccionar todos</button>
+          <button class="btn btn-ghost" onclick="Modules.vales.clearSel()">☐ Deseleccionar</button>
+          <button class="btn btn-success" onclick="Modules.vales.generateSelected()">🖨 Generar Vales Seleccionados</button>
+        </div>
+      </div>
+      <div class="card" style="margin-top:0">
+        <div class="card-header"><span class="card-title">📋 Log</span></div>
+        <div class="log-box" id="vales-log" style="height:180px">Carga un archivo para comenzar...</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">📋 Registros Patronales</span></div>
+      <div class="table-wrap"><table><thead><tr><th style="width:40px"></th><th>Registro Patronal</th><th>Razon Social</th><th>Creditos</th><th>Accion</th></tr></thead><tbody id="vales-reg-tbody"></tbody></table></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== ADMINISTRACION ===== -->
+<section id="page-admin" class="page">
+  <div style="display:flex;gap:8px;margin-bottom:16px">
+    <button class="btn adm-tab-btn active" data-tab="usuarios" onclick="Modules.admin.switchTab('usuarios')">👤 Usuarios</button>
+    <button class="btn adm-tab-btn btn-ghost" data-tab="encargados" onclick="Modules.admin.switchTab('encargados')">👔 Encargados</button>
+  </div>
+
+  <!-- USUARIOS -->
+  <div id="adm-usuarios-sec">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">👤 Usuarios del Sistema</span>
+        <div class="card-actions"><button class="btn btn-primary" onclick="Modules.admin.openUserModal()">+ Nuevo Usuario</button></div>
+      </div>
+      <div class="table-wrap" style="overflow-x:auto"><table><thead><tr><th>ID</th><th>Nombre</th><th>Usuario</th><th>Iniciales</th><th>Constancia / Matrícula</th><th>Departamento</th><th>Figura</th><th>Rol</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="adm-users-tbody"></tbody></table></div>
+    </div>
+  </div>
+
+  <!-- ENCARGADOS -->
+  <div id="adm-encargados-sec" style="display:none">
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">👔 Encargados y Jefes</span>
+        <div class="card-actions"><button class="btn btn-primary" onclick="Modules.admin.openEncModal()">+ Nuevo Encargado</button></div>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>ID</th><th>Nombre</th><th>Cargo</th><th>Departamento</th><th>Acciones</th></tr></thead><tbody id="adm-enc-tbody"></tbody></table></div>
+    </div>
+  </div>
+</section>
+
+<!-- MODAL USUARIO -->
+<div class="modal-overlay" id="au-modal">
+<div class="modal">
+  <div class="modal-title" id="au-modal-title">Nuevo Usuario</div>
+  <div class="modal-subtitle">Los campos marcados con * son obligatorios. La contraseña se guarda cifrada con bcrypt 🔒</div>
+  <div class="form-grid form-grid-2">
+    <div class="field"><label class="field-label">Nombre Completo *</label><input id="au-nombre" class="field-input" placeholder="Nombre completo"></div>
+    <div class="field"><label class="field-label">Usuario (login) *</label><input id="au-username" class="field-input" placeholder="Ej: jlopez"></div>
+    <div class="field"><label class="field-label">Iniciales / Rúbricas</label><input id="au-iniciales" class="field-input" placeholder="Ej: JLP"></div>
+    <div class="field"><label class="field-label">Constancia / Matrícula</label><input id="au-constancia-matricula" class="field-input" placeholder="Núm. de constancia o matrícula"></div>
+    <div class="field"><label class="field-label">Correo Electrónico</label><input id="au-email" type="email" class="field-input" placeholder="usuario@imss.gob.mx"></div>
+    <div class="field"><label class="field-label">Departamento</label><select id="au-depto" class="field-input"><option value="">— Seleccionar —</option><option>Administracion</option><option>Prestaciones Economicas</option><option>Cobranza</option><option>Auditoria</option><option>Afiliacion Vigencia</option><option>Direccion General</option><option>Registro y Control de la Cartera</option><option>Emision y Pago Oportuno</option></select></div>
+    <div class="field"><label class="field-label">Figura</label><select id="au-figura" class="field-input"><option value="">— Seleccionar —</option><option>Titular</option><option>Notificador-Localizador</option><option>Ejecutor Fiscal</option><option>Firma Digital</option><option>Auditor</option></select></div>
+    <div class="field"><label class="field-label">Rol</label>
+      <select id="au-rol" class="field-input" onchange="Modules.admin.onRoleChange(this.value)">
+        <option value="Visitador">Visitador</option>
+        <option value="Integrador">Integrador</option>
+        <option value="Supervisor">Supervisor</option>
+        <option value="Administrador">Administrador</option>
+      </select>
+    </div>
+    <div class="field" style="grid-column:1/-1">
+      <label class="field-label">🔒 Contraseña (cifrada con bcrypt)</label>
+      <input id="au-password" type="password" class="field-input" placeholder="Nueva contraseña…">
+      <span id="au-pw-note" style="font-size:11px;color:var(--text-muted);margin-top:4px;display:block">Obligatoria para nuevo usuario.</span>
+    </div>
+    <div class="field" style="grid-column: 1 / -1; display: none;" id="au-permisos-container">
+      <label class="field-label">Permisos Personalizados (Override)</label>
+      <div style="display:flex; flex-wrap:wrap; gap:16px; padding:12px; background:var(--surface); border:1px solid var(--border); border-radius:8px;">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="perm-dashboard" class="au-perm" value="dashboard"> Dashboard</label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="perm-expedientes" class="au-perm" value="expedientes"> Expedientes</label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="perm-visitas" class="au-perm" value="visitas"> Visitas</label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="perm-viaticos" class="au-perm" value="viaticos"> Viáticos</label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="perm-analisis" class="au-perm" value="analisis"> Analisis</label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="perm-vales" class="au-perm" value="vales"> Vales</label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="perm-admin" class="au-perm" value="admin"> Administración</label>
+        <div style="width:100%;height:1px;background:var(--border);margin:4px 0;"></div>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="perm-visitas_origen_write" class="au-perm" value="visitas_origen_write"> Editar Visitas Origen</label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="perm-viaticos_write" class="au-perm" value="viaticos_write"> Editar Viáticos</label>
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Nota: Solo el Administrador puede configurar excepciones. Si cambias de rol, se aplicarán los permisos por defecto de ese rol a menos que los modifiques manualmente.</div>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-ghost" onclick="Modules.admin.closeUserModal()">Cancelar</button>
+    <button id="au-save-btn" class="btn btn-primary" onclick="Modules.admin.saveUser()">💾 Guardar</button>
+  </div>
+</div>
+</div>
+
+<!-- MODAL ENCARGADO -->
+<div class="modal-overlay" id="ae-modal">
+<div class="modal">
+  <div class="modal-title">Encargado / Jefe</div>
+  <div class="form-grid">
+    <div class="field"><label class="field-label">Nombre Completo *</label><input id="ae-nombre" class="field-input"></div>
+    <div class="field"><label class="field-label">Cargo</label><select id="ae-cargo" class="field-input"><option value="">— Seleccionar —</option><option>Jefe de Oficina</option><option>Jefa de Oficina</option><option>Subdelegado</option><option>Coordinador</option><option>Supervisor</option><option>Director</option><option>Titular</option></select></div>
+    <div class="field"><label class="field-label">Departamento</label><select id="ae-depto" class="field-input"><option value="">— Seleccionar —</option><option>Prestaciones Economicas</option><option>Cobranza</option><option>Auditoria</option><option>Afiliacion Vigencia</option><option>Direccion General</option></select></div>
+  </div>
+  <div class="modal-footer">
+    <button class="btn btn-ghost" onclick="Modules.admin.closeEncModal()">Cancelar</button>
+    <button class="btn btn-primary" onclick="Modules.admin.saveEnc()">💾 Guardar</button>
+  </div>
+</div>
+</div>
+
+  </div><!-- /page-content -->
+</div><!-- /main -->
+</div><!-- /app -->
+
+<!-- TOAST CONTAINER -->
+<div id="toast-container"></div>
+
+<!-- SCRIPTS -->
+<script src="js/db.js?v=6"></script>
+<script src="js/utils.js?v=6"></script>
+<script>window.Modules = {};</script>
+<script src="js/dashboard.js?v=6"></script>
+<script src="js/expedientes.js?v=6"></script>
+<script src="js/visitas.js?v=6"></script>
+<script src="js/visitas_forms.js?v=6"></script>
+<script src="js/pizzip.min.js?v=6"></script>
+<script src="js/docxtemplater.js?v=6"></script>
+<script src="js/docxtemplater-image-module-free.js?v=6"></script>
+<script src="js/reportes.js?v=6"></script>
+<script src="js/viaticos.js?v=6"></script>
+<script src="js/analisis.js?v=6"></script>
+<script src="js/vales.js?v=6"></script>
+<script src="js/sqlitedb.js?v=6"></script>
+<script src="js/admin.js?v=6"></script>
+<script src="js/app.js?v=6"></script>
+<script>
+// ── Control tab helper ──────────────────────────────────────
+function showCtrlTab(tab, btn) {
+  ['socios','fi','fe'].forEach(t => {
+    document.getElementById('ctrl-tab-' + t).style.display = t === tab ? '' : 'none';
+  });
+  document.querySelectorAll('[onclick*="showCtrlTab"]').forEach(b => b.classList.toggle('active', b === btn));
+}
+
+// ── Clock ───────────────────────────────────────────────────
+(function clock() {
+  const el = document.getElementById('clock');
+  if (el) el.textContent = new Date().toLocaleTimeString('es-MX', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  setTimeout(clock, 1000);
+})();
+
+// ── Cerrar modales con Escape ───────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.querySelectorAll('.modal-overlay.open').forEach(m => m.classList.remove('open'));
+});
+
+// ── Cerrar modal al click fuera ─────────────────────────────
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.remove('open'); });
+});
+</script>
+</body>
+</html>
